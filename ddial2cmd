@@ -1,1 +1,1 @@
-java -jar jace.jar -computer.s6card disk -s6.d1 ddial.dsk  -computer.s1card hayes -s1.port 2977  -computer.s2card hayes -s2.port 2978 -computer.s3card hayes -s3.port 2979   -computer.s4card hayes -s4.port 2980 -computer.s5card hayes -s5.port 2981  -computer.s7card hayes -s7.port 2983
+java -jar target/Jace.jar -computer.s6card disk -s6.d1 ddial.dsk  -computer.s1card hayes -s1.port 2977  -computer.s2card hayes -s2.port 2978 -computer.s3card hayes -s3.port 2979   -computer.s4card hayes -s4.port 2980 -computer.s5card hayes -s5.port 2981  -computer.s7card hayes -s7.port 2983

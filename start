@@ -1,7 +1,7 @@
 #!/bin/bash
 source ./home
 ./ddial1cmd &
-sleep 10
-./ddial2cmd &
 sleep 20
+./ddial2cmd &
+sleep 30
 python3 bridge.py localhost 1983 localhost 2983

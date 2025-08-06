@@ -1,2 +1,0 @@
-export JAVA_HOME=/home/oo/src/jdk1.8.0_202
-export PATH="/home/oo/src/jdk1.8.0_202/bin:$PATH"

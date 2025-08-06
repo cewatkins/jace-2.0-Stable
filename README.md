@@ -1,6 +1,15 @@
 Java Apple Computer Emulator
 ====
 
+*A Heavily modified Jace-3.1, did not seem to fit or run as solid, so I remodified jace-2.
+*make sure ./home is run/sourced to set JAVA_HOME the use of it along with building is critical the included Java is used.
+*apt add for codespaces assures graphics work, even though it autoboots.
+*First published, git of anything like this, I'll say my first, so if It doesn't work, I never get fan-mail, so give me a ticket!
+*Thanks to jace team, DS's, Interchat#17, Magviz.ca & all the other motivators and folks that can code there way out of a wet_paper_sack();
+
+./start should do the magic, if not it outlines execution orders. Don't worry I'm top on the list & I'm still alive.
+
+
 Download:
 
 * [See releases page for most recent](https://github.com/badvision/jace/releases)

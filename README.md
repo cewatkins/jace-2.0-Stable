@@ -8,7 +8,7 @@ Java Apple Computer Emulator
 *Thanks to jace team, DS's, Interchat#17, Magviz.ca & all the other motivators and folks that can code there way out of a wet_paper_sack();
 *changed repository name to fit better
 ./start should do the magic, if not it outlines execution orders. Don't worry I'm top on the list & I'm still alive.
-
+![alt text](image.png)
 
 Download:
 

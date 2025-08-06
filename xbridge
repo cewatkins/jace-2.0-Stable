@@ -1,0 +1,191 @@
+#!/usr/bin/expect -f
+
+set LOG_FILE "relay_log.txt"
+
+proc parse_args {} {
+    global argv no_auth host1 port1 host2 port2
+    set no_auth "none"
+    set i 0
+    while {$i < [llength $argv]} {
+        set arg [lindex $argv $i]
+        if {$arg == "-N" || $arg == "--no-auth"} {
+            incr i
+            set no_auth [lindex $argv $i]
+        } elseif {![info exists host1]} {
+            set host1 $arg
+        } elseif {![info exists port1]} {
+            set port1 $arg
+        } elseif {![info exists host2]} {
+            set host2 $arg
+        } elseif {![info exists port2]} {
+            set port2 $arg
+        } else {
+            puts "Unknown argument: $arg"
+            exit 1
+        }
+        incr i
+    }
+    if {![info exists host1] || ![info exists port1] || ![info exists host2] || ![info exists port2]} {
+        puts "Usage: expect script.exp \[-N|--no-auth first|second|both\] host1 port1 host2 port2"
+        exit 1
+    }
+}
+
+proc log_data {direction data} {
+    set timestamp [clock format [clock seconds] -format "%Y-%m-%d %H:%M:%S"]
+    set fd [open $LOG_FILE a]
+    puts $fd "\[$timestamp\] $direction [string length $data] bytes:\n$data\n"
+    close $fd
+}
+
+proc authenticate_telnet_connection {host port login_key require_auth} {
+    if {!$require_auth} {
+        puts "Authentication skipped for $host:$port"
+        spawn telnet $host $port
+        if {$spawn_id == ""} {
+            puts "Failed to connect to $host:$port"
+            exit 1
+        }
+        return $spawn_id
+    }
+    set retry_delay 5
+    while {1} {
+        puts "Connecting to $host:$port..."
+        if {[catch {spawn telnet $host $port} err]} {
+            puts "Failed to connect to $host:$port: $err"
+            puts "Retrying in $retry_delay seconds..."
+            sleep $retry_delay
+            continue
+        }
+        set tn $spawn_id
+
+        # Enable Expect debug logging
+        exp_internal 1
+
+        # Show all received data before sending login key
+        expect -i $tn {
+            -re "Apple" {
+                puts "Received: $expect_out(buffer)"
+                exp_continue
+            }
+            -re "-->" {
+                puts "Prompt '-->' detected. Received: $expect_out(buffer)"
+                puts "Sending login key: $login_key"
+                send -i $tn "$login_key\r"
+                expect -i $tn {
+                    -re "-->" {
+                        puts "Login complete. Received: $expect_out(buffer)"
+                        exp_internal 0
+                        return $tn
+                    }
+                    timeout {
+                        puts "Timeout waiting for confirmation prompt. Received: $expect_out(buffer)"
+                        close -i $tn
+                        puts "Retrying in $retry_delay seconds..."
+                        sleep $retry_delay
+                        exp_internal 0
+                        continue
+                    }
+                    eof {
+                        puts "Connection closed by remote host. Received: $expect_out(buffer)"
+                        puts "Retrying in $retry_delay seconds..."
+                        sleep $retry_delay
+                        exp_internal 0
+                        continue
+                    }
+                }
+            }
+            timeout {
+                puts "Timeout waiting for prompt. Received: $expect_out(buffer)"
+                close -i $tn
+                puts "Retrying in $retry_delay seconds..."
+                sleep $retry_delay
+                exp_internal 0
+                continue
+            }
+            eof {
+                puts "Connection closed by remote host. Received: $expect_out(buffer)"
+                puts "Retrying in $retry_delay seconds..."
+                sleep $retry_delay
+                exp_internal 0
+                continue
+            }
+        }
+    }
+}
+
+
+proc relay_loop {sid1 sid2 port1 port2} {
+    set buffer1 ""
+    set buffer2 ""
+    log_data "SYSTEM" "Relay loop started, flushing initial buffers\n"
+    while {1} {
+        expect {
+            -i $sid1 -re "(?s)(.+)" {
+                set data $expect_out(1,string)
+                append buffer1 $data
+                set pos -1
+                while {[set pos [string first "\n" $buffer1]] >= 0} {
+                    set line [string range $buffer1 0 $pos]
+                    set buffer1 [string range $buffer1 [expr {$pos + 1}] end]
+                    log_data "$port1 → $port2" $line
+                }
+                if {[string first "-->" $data] >= 0 || [string first "assword" $data] >= 0} {
+                    log_data "$port1 → $port2" $buffer1
+                    set buffer1 ""
+                }
+                send -i $sid2 -- $data
+                exp_continue
+            }
+            -i $sid2 -re "(?s)(.+)" {
+                set data $expect_out(1,string)
+                append buffer2 $data
+                set pos -1
+                while {[set pos [string first "\n" $buffer2]] >= 0} {
+                    set line [string range $buffer2 0 $pos]
+                    set buffer2 [string range $buffer2 [expr {$pos + 1}] end]
+                    log_data "$port2 → $port1" $line
+                }
+                if {[string first "-->" $data] >= 0 || [string first "assword" $data] >= 0} {
+                    log_data "$port2 → $port1" $buffer2
+                    set buffer2 ""
+                }
+                send -i $sid1 -- $data
+                exp_continue
+            }
+            -i $sid1 eof {
+                if {$buffer1 != ""} {
+                    log_data "$port1 → $port2" $buffer1
+                }
+                return
+            }
+            -i $sid2 eof {
+                if {$buffer2 != ""} {
+                    log_data "$port2 → $port1" $buffer2
+                }
+                return
+            }
+        }
+    }
+}
+
+parse_args
+set login_key1 [expr {[info exists env(LOGIN_KEY_$port1)] ? $env(LOGIN_KEY_$port1) : "912539157"}]
+set login_key2 [expr {[info exists env(LOGIN_KEY_$port2)] ? $env(LOGIN_KEY_$port2) : "912539157"}]
+puts "Using login keys: $port1: $login_key1, $port2: $login_key2"
+
+set auth_first [expr {$no_auth != "first" && $no_auth != "both"}]
+set auth_second [expr {$no_auth != "second" && $no_auth != "both"}]
+
+while {1} {
+    set sid1 [authenticate_telnet_connection $host1 $port1 $login_key1 $auth_first]
+    set sid2 [authenticate_telnet_connection $host2 $port2 $login_key2 $auth_second]
+    puts "Bridge established. Relaying traffic..."
+    if {[catch {relay_loop $sid1 $sid2 $port1 $port2} err]} {
+        puts "\[ERROR\] Relay loop terminated: $err"
+    }
+    puts "Restarting connections...\n"
+    sleep 3
+    close -i $sid1
+    close -i $sid2
+}

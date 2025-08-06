@@ -1,0 +1,175 @@
+import argparse
+import telnetlib
+import socket
+import selectors
+import sys
+import time
+import os
+import uuid
+
+LOG_FILE = 'relay_log.txt'
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Telnet relay with optional authentication disable")
+    parser.add_argument("-N", "--no-auth", choices=['first', 'second', 'both'], 
+                       help="Disable authentication for first host, second host, or both")
+    parser.add_argument("host1", help="First hostname")
+    parser.add_argument("port1", type=int, help="First port")
+    parser.add_argument("host2", help="Second hostname")
+    parser.add_argument("port2", type=int, help="Second port")
+    return parser.parse_args()
+
+def log_data(direction, data):
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+    with open(LOG_FILE, 'a') as f:
+        f.write(f"[{timestamp}] {direction} {len(data)} bytes:\n{data.decode(errors='ignore')}\n\n")
+
+def wait_for_prompt(tn, prompts=(b'-->', b'assword'), timeout=5):
+    buffer = b''
+    start_time = time.time()
+    while True:
+        if time.time() - start_time > timeout:
+            print("Prompt wait timeout, continuing...")
+            if buffer:
+                print("Partial prompt data:", buffer.decode(errors='ignore'))
+            return buffer
+        chunk = tn.read_some()
+        if chunk:
+            buffer += chunk
+            for prompt in prompts:
+                if buffer.strip().endswith(prompt):
+                    print("Prompt received:", buffer.decode(errors='ignore'))
+                    return buffer
+        else:
+            time.sleep(0.05)
+def authenticate_telnet_connection(host, port, login_key, require_auth):
+    if not require_auth:
+        print(f"Authentication skipped for {host}:{port}")
+        try:
+            tn = telnetlib.Telnet(host, port)
+            return tn
+        except Exception as e:
+            print(f"Failed to connect to {host}:{port}: {e}")
+            raise
+    retry_delay = 5
+    while True:
+        try:
+            print(f"Connecting to {host}:{port}...")
+            tn = telnetlib.Telnet(host, port)
+            #wait_for_prompt(tn, prompts=(b' -->', b'assword', b'Apple'))
+            #wait_for_prompt(tn, prompts=(b' -->', b'assword', b'Apple'))
+            time.sleep(10)  # Add a short delay to ensure prompt is ready
+
+            # Flush any pending input
+            tn.read_very_eager()
+
+            print(f"Sending login key to {host}:{port} -> {login_key}")
+            tn.write(login_key.encode('ascii') + b'\r\n')
+            time.sleep(5)
+            #wait_for_prompt(tn, prompts=(b'}}}', b'assword',b'Remote'))
+            print(f"Login to {host}:{port} complete.")
+            return tn
+        except Exception as e:
+            print(f"Failed to connect/authenticate to {host}:{port}: {e}")
+            print(f"Retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
+
+def relay_loop(sock1, sock2):
+    sel = selectors.DefaultSelector()
+    sel.register(sock1, selectors.EVENT_READ, data='from1')
+    sel.register(sock2, selectors.EVENT_READ, data='from2')
+
+    buffers = {
+        'from1': b'',
+        'from2': b''
+    }
+
+    try:
+        log_data("SYSTEM", b"Relay loop started, flushing initial buffers\n")
+
+        while True:
+            for key, _ in sel.select():
+                try:
+                    if key.data == 'from1':
+                        data = sock1.recv(4096)
+                        if not data:
+                            if buffers['from1']:
+                                log_data("1977 → 2977", buffers['from1'])
+                                buffers['from1'] = b''
+                            raise ConnectionError("Connection closed by host1")
+                        buffers['from1'] += data
+
+                        while b'\n' in buffers['from1']:
+                            line, buffers['from1'] = buffers['from1'].split(b'\n', 1)
+                            log_data("1977 → 2977", line + b'\n')
+
+                        if b'-->' in data or b'assword' in data:
+                            log_data("1977 → 2977", buffers['from1'])
+                            buffers['from1'] = b''
+
+                        sock2.sendall(data)
+
+                    elif key.data == 'from2':
+                        data = sock2.recv(4096)
+                        if not data:
+                            if buffers['from2']:
+                                log_data("2977 → 1977", buffers['from2'])
+                                buffers['from2'] = b''
+                            raise ConnectionError("Connection closed by host2")
+                        buffers['from2'] += data
+
+                        while b'\n' in buffers['from2']:
+                            line, buffers['from2'] = buffers['from2'].split(b'\n', 1)
+                            log_data("2977 → 1977", line + b'\n')
+
+                        if b'-->' in data or b'assword' in data:
+                            log_data("2977 → 1977", buffers['from2'])
+                            buffers['from2'] = b''
+
+                        sock1.sendall(data)
+
+                except ConnectionError as ce:
+                    raise ce
+                except Exception as e:
+                    print("Data relay error:", e)
+    finally:
+        sel.close()
+        sock1.close()
+        sock2.close()
+
+def main():
+    args = parse_args()
+    host1, port1, host2, port2, no_auth = args.host1, args.port1, args.host2, args.port2, args.no_auth
+
+    login_keys = {
+        port1: os.getenv(f'LOGIN_KEY_{port1}', '912539157'),
+        port2: os.getenv(f'LOGIN_KEY_{port2}', '912539157')
+    }
+
+    print(f"Using login keys: {login_keys}")
+
+    # Determine authentication settings
+    auth_first = not (no_auth in ['first', 'both'])
+    auth_second = not (no_auth in ['second', 'both'])
+
+    while True:
+        try:
+            tn1 = authenticate_telnet_connection(host1, port1, login_keys[port1], auth_first)
+            tn2 = authenticate_telnet_connection(host2, port2, login_keys[port2], auth_second)
+
+            sock1 = tn1.get_socket()
+            sock2 = tn2.get_socket()
+
+            sock1.setblocking(False)
+            sock2.setblocking(False)
+
+            print("Bridge established. Relaying traffic...")
+            relay_loop(sock1, sock2)
+
+        except Exception as e:
+            print(f"[ERROR] Relay loop terminated: {e}")
+            print("Restarting connections...\n")
+            time.sleep(3)
+
+if __name__ == "__main__":
+    main()
